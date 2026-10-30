@@ -5,21 +5,27 @@
   python engine.py scrape --wl SW7.5 SW42 --rf CL9
   python engine.py backfill-wl --from 2026-05-01 --to 2026-10-11 [--wl SW7.5]
   python engine.py predict [--date 2026-10-01] [--wl SW7.5]
+  python engine.py predict --from 2026-10-15 --to 2026-10-29   # one forecast per issue day
   python engine.py all                            # scrape enabled + predict
   python engine.py import-wl history_wl.csv      # station_id,date,wl
   python engine.py import-rf history_rf.csv      # rf_station_id,date,rainfall_mm
+  python engine.py import-rf-json old/rf_CL9.json ...        # saved FFWC rainfall responses
+  python engine.py import-ffwc-pdf models/ffwc_predictions/*.pdf   # FFWC forecast bulletins
 """
 import argparse
 import json
 import logging
+import re
 import threading
 import traceback
 from datetime import date, datetime, time, timedelta
+from pathlib import Path
 
 import pandas as pd
 
 import config
 import db
+import ffwc_pdf
 import scraper
 from forecaster import INPUT_DAYS, Forecaster, InputError
 
@@ -119,11 +125,29 @@ def scrape(conn, run_id: int, wl_codes=None, rf_codes=None, end_date: date | Non
             errors.append(f"RF {code}: {exc}")
             if "x-ffwc-internal-key" in str(exc):
                 break
+
+    # FFWC's own 5-day forecast, one request for all stations (full scrapes only)
+    if do_wl and wl_codes is None:
+        db.set_progress(conn, run_id, "FFWC 5-day forecast")
+        try:
+            stats["ffwc_rows"] = scrape_ffwc_5day(conn)
+        except Exception as exc:  # noqa: BLE001
+            conn.rollback()
+            log.exception("FFWC 5-day forecast failed")
+            errors.append(f"FFWC forecast: {exc}")
     return stats, errors
 
 
+def scrape_ffwc_5day(conn) -> int:
+    code_of = {s["web_id"]: s["id"] for s in db.model_station_info(conn)}
+    rows = [(code_of[w], issued, t, wl) for w, issued, t, wl in scraper.fetch_ffwc_5day() if w in code_of]
+    n = db.upsert_forecasts(conn, "ffwc", rows, ffwc_pdf.PRODUCT_5DAY)
+    conn.commit()
+    return n
+
+
 def backfill_wl(conn, run_id: int, start: date, end: date, wl_codes=None) -> tuple[dict, list]:
-    """The WL endpoint returns ~60 days ending at a date, so walk backwards."""
+    """The WL endpoint returns 40 days ending at a date, so walk backwards."""
     stats, errors = {"wl_rows": 0, "requests": 0}, []
     cursor = end
     while cursor >= start:
@@ -179,6 +203,12 @@ def predict(conn, run_id: int, issue_date: date | None = None, wl_codes=None) ->
 
 
 # ---- logged task runner (CLI, admin panel, scheduler) --------------------
+def _days(start: date, end: date) -> list[date]:
+    if end < start:
+        raise ValueError("end date is before start date")
+    return [start + timedelta(days=k) for k in range((end - start).days + 1)]
+
+
 def run_task(task: str, wl: list[str] | None = None, rf: list[str] | None = None,
              end_date: date | None = None, start_date: date | None = None,
              issue_date: date | None = None) -> dict:
@@ -201,7 +231,16 @@ def run_task(task: str, wl: list[str] | None = None, rf: list[str] | None = None
                         raise ValueError("backfill-wl needs a start date")
                     stats["backfill"], e = backfill_wl(conn, run_id, start_date, end_date or _today(), wl)
                     errors += e
-                if task in ("predict", "all"):
+                if task == "predict" and start_date:
+                    # One forecast per issue day in [start_date, end_date] (hindcasts for past days)
+                    stats["predict"] = {"predicted": 0, "days": {}}
+                    for day in _days(start_date, end_date or start_date):
+                        s, e = predict(conn, run_id, day, wl)
+                        stats["predict"]["predicted"] += s["predicted"]
+                        stats["predict"]["days"][day.isoformat()] = {
+                            "predicted": s["predicted"], "skipped": s["skipped"]}
+                        errors += [f"{day}: {m}" for m in e]
+                elif task in ("predict", "all"):
                     codes = wl if task == "predict" else None
                     stats["predict"], e = predict(conn, run_id, issue_date, codes)
                     errors += e
@@ -231,6 +270,41 @@ def import_wl_csv(path: str):
     log.info("imported %d WL rows (stations not in the DB were dropped)", n)
 
 
+def import_ffwc_pdf(paths: list[str]):
+    """FFWC forecast bulletins (5-day / 10-day PDFs) -> forecasts, source 'ffwc'."""
+    with db.connect() as conn:
+        stations = db.model_station_info(conn)
+        for path in paths:
+            b = ffwc_pdf.parse(path)
+            rows, unmatched = [], []
+            for sf in b.stations:
+                sid = ffwc_pdf.match_station(sf, stations)
+                if sid is None:
+                    unmatched.append(" ".join(sf.words))
+                    continue
+                rows += [(sid, b.issued_on, t, wl) for t, wl in sf.values]
+            n = db.upsert_forecasts(conn, "ffwc", rows, b.product)
+            conn.commit()
+            log.info("%s: %s issued %s, %d rows for %d model stations (%d other stations skipped)",
+                     path, b.product, b.issued_on, n, len({r[0] for r in rows}), len(unmatched))
+
+
+def import_rf_json(paths: list[str]):
+    """Saved FFWC rainfall responses named rf_<CODE>.json (e.g. the old scraper's files)."""
+    with db.connect() as conn:
+        api_ids = {r["id"]: r["api_id"] for r in db.list_rf_stations(conn)}
+        for path in paths:
+            code = re.match(r"rf_(.+)\.json$", Path(path).name)
+            if not code or code.group(1) not in api_ids:
+                log.warning("%s: unknown rainfall station, skipped", path)
+                continue
+            code = code.group(1)
+            rows = scraper.parse_rf(json.load(open(path, encoding="utf-8")), api_ids[code])
+            n = db.upsert_observed_rf(conn, [(code, d, mm) for d, mm in rows])
+            conn.commit()
+            log.info("%s: %d rainfall rows for %s", path, n, code)
+
+
 def import_rf_csv(path: str):
     df = pd.read_csv(path, dtype={"rf_station_id": str}).dropna(
         subset=["rf_station_id", "date", "rainfall_mm"])
@@ -246,8 +320,9 @@ def import_rf_csv(path: str):
 
 if __name__ == "__main__":
     p = argparse.ArgumentParser()
-    p.add_argument("task", choices=[*TASKS, "sync-stations", "import-wl", "import-rf"])
-    p.add_argument("path", nargs="?", help="CSV for import-wl / import-rf")
+    p.add_argument("task", choices=[*TASKS, "sync-stations", "import-wl", "import-rf",
+                                    "import-rf-json", "import-ffwc-pdf"])
+    p.add_argument("path", nargs="*", help="file(s) for the import-* tasks")
     p.add_argument("--wl", nargs="*", help="WL station codes, e.g. SW7.5 SW42 (sync: JSON file)")
     p.add_argument("--rf", nargs="*", help="rainfall station codes, e.g. CL9 (sync: JSON file)")
     p.add_argument("--from", dest="start", type=date.fromisoformat)
@@ -262,8 +337,12 @@ if __name__ == "__main__":
     if a.task == "sync-stations":
         print(sync_stations(_load(a.wl), _load(a.rf), a.apply_targets))
     elif a.task == "import-wl":
-        import_wl_csv(a.path)
+        import_wl_csv(a.path[0])
     elif a.task == "import-rf":
-        import_rf_csv(a.path)
+        import_rf_csv(a.path[0])
+    elif a.task == "import-rf-json":
+        import_rf_json(a.path)
+    elif a.task == "import-ffwc-pdf":
+        import_ffwc_pdf(a.path)
     else:
         print(run_task(a.task, a.wl, a.rf, end_date=a.end, start_date=a.start, issue_date=a.date))

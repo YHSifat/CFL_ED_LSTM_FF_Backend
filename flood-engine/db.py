@@ -194,6 +194,12 @@ def upsert_forecasts(conn, source: str, rows: list[tuple], model_version: str | 
     return len(rows)
 
 
+def model_station_info(conn) -> list[dict]:
+    """[{id, web_id, name, river}] for has_model stations (FFWC forecasts are kept for these only)."""
+    return _dicts(conn.execute(
+        "select id, web_id, name, river from stations where has_model order by id"))
+
+
 def model_stations(conn, codes: list[str] | None = None) -> list[tuple[str, str | None]]:
     if codes:
         return conn.execute("select id, rf_station_id from stations where id = any(%s) order by id",

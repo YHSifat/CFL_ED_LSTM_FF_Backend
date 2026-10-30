@@ -27,12 +27,12 @@ USER_AGENT = os.getenv(
 # Optional: URLs of the station-list endpoints (else import the JSON files)
 FFWC_WL_STATIONS_URL = os.getenv("FFWC_WL_STATIONS_URL", "")
 FFWC_RF_STATIONS_URL = os.getenv("FFWC_RF_STATIONS_URL", "")
-# Optional: FFWC forecast endpoint (not wired up until we have a sample response)
-FFWC_FORECAST_URL = os.getenv("FFWC_FORECAST_URL", "")
+# FFWC's own 5-day forecast (JSON, all stations, 06-18h 3-hourly), scraped for comparison
+FFWC_5DAY_URL = FFWC_API_BASE + "/five-days-forecast-waterlevel/"
 
 REQUEST_DELAY_S = float(os.getenv("REQUEST_DELAY_S", "3"))   # pause between requests
-# The WL endpoint returns ~60 days ending at the requested date; backfill steps by this
-WL_BACKFILL_STEP_DAYS = int(os.getenv("WL_BACKFILL_STEP_DAYS", "50"))
+# The WL endpoint returns 40 days ending at the requested date; backfill steps by less so windows overlap
+WL_BACKFILL_STEP_DAYS = int(os.getenv("WL_BACKFILL_STEP_DAYS", "35"))
 # FFWC writes local Bangladesh times with a "Z" suffix (readings at 06:00-18:00),
 # so the suffix is ignored and times are treated as Asia/Dhaka.
 FFWC_TIME_IS_LOCAL = os.getenv("FFWC_TIME_IS_LOCAL", "true").lower() == "true"

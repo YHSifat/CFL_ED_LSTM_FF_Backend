@@ -1,12 +1,13 @@
 """FFWC API client: station lists, observed water level, rainfall.
 
 Endpoints and formats taken from the ffwc.gov.bd site's own requests:
-  WL : /observed-waterlevel-by-station-and-date/{web_id}/{YYYY-MM-DD}/  (~60 days, 3-hourly)
+  WL : /observed-waterlevel-by-station-and-date/{web_id}/{YYYY-MM-DD}/  (40 days, 3-hourly)
   RF : /rainfall-by-station/{api_id}/                                  (~40 days, daily)
+  FC : /five-days-forecast-waterlevel/   (FFWC 5-day forecast, all stations, 3-hourly)
 """
 import logging
 import time
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 
 import requests
 
@@ -234,7 +235,27 @@ def fetch_rf(api_id: str) -> list[tuple]:
     return parse_rf(_as_list(get_json(config.RF_URL.format(api_id=api_id))), api_id)
 
 
-def fetch_ffwc_forecasts() -> list[tuple]:
-    """FFWC's own forecasts for the comparison graph -> [(station_code, issued_on, target_date, wl)].
-    Not wired up yet: share a sample response from the forecast endpoint to implement it."""
-    return []
+# ---- FFWC's own forecasts ----------------------------------------------------
+def parse_ffwc_5day(payload: dict) -> list[tuple]:
+    """five-days-forecast-waterlevel: {"<web_id>": [{"2026-10-31 06:00:00Z": 2.31}, ...]}
+    -> [(web_id, issued_on, target_time, wl)]. Times are local despite the "Z" (as for WL).
+    The response only says when values are for, not when they were issued: the first
+    target is 06:00 the day after issue (same as our model), so issued_on = that day - 1."""
+    rows = []
+    for web_id, steps in (payload or {}).items():
+        if not isinstance(steps, list):
+            continue
+        points = []
+        for step in steps:
+            for ts, wl in (step.items() if isinstance(step, dict) else ()):
+                t, v = parse_wl_time(str(ts).replace(" ", "T")), _num(wl)
+                if t is not None and v is not None:
+                    points.append((t, v))
+        if points:
+            issued_on = min(t for t, _ in points).date() - timedelta(days=1)
+            rows += [(int(web_id), issued_on, t, v) for t, v in points]
+    return rows
+
+
+def fetch_ffwc_5day() -> list[tuple]:
+    return parse_ffwc_5day(get_json(config.FFWC_5DAY_URL))

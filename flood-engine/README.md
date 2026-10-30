@@ -20,7 +20,7 @@ The engine calls the same endpoints the ffwc.gov.bd site uses:
 
 | Data | URL | Returns |
 |---|---|---|
-| Water level | `/data_load/observed-waterlevel-by-station-and-date/{web_id}/{YYYY-MM-DD}/` | ~60 days ending at the date, 5 readings a day |
+| Water level | `/data_load/observed-waterlevel-by-station-and-date/{web_id}/{YYYY-MM-DD}/` | 40 days ending at the date, 5 readings a day |
 | Rainfall | `/data_load/rainfall-by-station/{api_id}/` | ~40 days, daily |
 
 Put the `x-ffwc-internal-key` value in `.env` as `FFWC_API_KEY`. It will probably change;
@@ -77,7 +77,20 @@ await sb.from('forecast_vs_observed').select('*').eq('station_id', id).eq('lead_
 
 // summary skill per lead day
 await sb.rpc('forecast_skill', { p_station: id, p_from: '2026-06-01', p_to: '2026-10-30' });
+
+// ours vs FFWC on matched times: issue days for a station, then error by lead day
+await sb.rpc('comparison_issues', { p_station: id });
+await sb.rpc('comparison_skill', { p_station: id });   // null = all stations
+
+// performance per horizon (step 1 = next day 06:00, 5 = 1 day, 75 = 15 days), targets in a date range
+await sb.rpc('horizon_performance', { p_station: id, p_step: 5, p_from: '2026-10-16', p_to: '2026-10-30' });
+await sb.rpc('horizon_skill', { p_station: id, p_from: '2026-10-16', p_to: '2026-10-30' });   // null = all
 ```
+
+FFWC forecasts: every full `scrape` stores FFWC's current 5-day forecast (JSON). Past
+bulletins (PDF) are loaded with `python engine.py import-ffwc-pdf models/ffwc_predictions/*.pdf`;
+run `python engine.py predict --date <issue day>` (or `--from A --to B`, one per day)
+to make our matching hindcasts. The admin panel does the same from forecast start dates.
 
 ## 5. Automating later
 Windows Task Scheduler or cron: `python engine.py all` a few times a day.
