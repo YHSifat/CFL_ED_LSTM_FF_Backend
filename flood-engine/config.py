@@ -7,7 +7,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # Supabase -> Project Settings -> Database -> Connection string -> "Session pooler"
-DATABASE_URL = os.environ["DATABASE_URL"]
+DATABASE_URL = os.getenv("DATABASE_URL", "")   # checked in db.connect()
 TZ = ZoneInfo("Asia/Dhaka")
 
 # ---- FFWC API --------------------------------------------------------------
@@ -39,11 +39,10 @@ FFWC_TIME_IS_LOCAL = os.getenv("FFWC_TIME_IS_LOCAL", "true").lower() == "true"
 RF_DATE_FORMAT = os.getenv("RF_DATE_FORMAT", "%m-%d-%Y")       # e.g. "09-30-2026"
 
 # ---- Model -----------------------------------------------------------------
-MODEL_DIR = os.getenv("MODEL_DIR", "models")
-MODEL_VERSION = os.getenv("MODEL_VERSION", "v1")
-INPUT_DAYS = 30
-HORIZON_DAYS = 15
-INPUT_LAYOUT = os.getenv("INPUT_LAYOUT", "sequence")    # "sequence" (1,30,2) | "flat" (1,60)
-OUTPUT_IS_DELTA = os.getenv("OUTPUT_IS_DELTA", "false").lower() == "true"
-MAX_MISSING_WL_DAYS = int(os.getenv("MAX_MISSING_WL_DAYS", "3"))
 MAX_STALENESS_DAYS = int(os.getenv("MAX_STALENESS_DAYS", "2"))
+
+# Clustered federated LSTM checkpoint (forecaster.py). Its architecture, scaler,
+# stations and clusters are read from the checkpoint itself.
+MODEL_PATH = os.getenv("MODEL_PATH", "models/clustered_fl_vanilla_lstm-local-weighted-0.5.pt")
+# Longest run of missing WL readings filled by interpolation (training used 10 = ~2 days)
+MAX_WL_INTERP_STEPS = int(os.getenv("MAX_WL_INTERP_STEPS", "10"))

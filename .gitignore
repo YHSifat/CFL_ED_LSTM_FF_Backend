@@ -3,3 +3,6 @@ __pycache__/
 *.pyc
 models/*
 !models/.gitkeep
+flood-engine/logs/
+flood-engine/models/*.pt
+flood-engine/models/prediction_scripts/data/

@@ -1,6 +1,6 @@
 """All database reads/writes for the engine and admin panel."""
 from contextlib import contextmanager
-from datetime import date, timedelta
+from datetime import date
 
 import pandas as pd
 import psycopg
@@ -12,6 +12,8 @@ import config
 
 @contextmanager
 def connect():
+    if not config.DATABASE_URL:
+        raise RuntimeError("DATABASE_URL is not set (see .env.example)")
     with psycopg.connect(config.DATABASE_URL, prepare_threshold=None) as conn:
         yield conn
 
@@ -181,12 +183,12 @@ def upsert_observed_rf(conn, rows: list[tuple]) -> int:
 
 
 def upsert_forecasts(conn, source: str, rows: list[tuple], model_version: str | None) -> int:
-    """rows: [(station_code, issued_on, target_date, wl)]"""
+    """rows: [(station_code, issued_on, target_time, wl)], target_time tz-aware"""
     with conn.cursor() as cur:
         cur.executemany("""
-            insert into forecasts (source, station_id, issued_on, target_date, wl, model_version)
+            insert into forecasts (source, station_id, issued_on, target_time, wl, model_version)
             values (%s, %s, %s, %s, %s, %s)
-            on conflict (source, station_id, issued_on, target_date)
+            on conflict (source, station_id, issued_on, target_time)
             do update set wl = excluded.wl, model_version = excluded.model_version, created_at = now()
         """, [(source, *r, model_version) for r in rows])
     return len(rows)
@@ -204,17 +206,25 @@ def last_wl_day(conn, station_id: str) -> date | None:
                         (station_id,)).fetchone()[0]
 
 
-def get_input_window(conn, station_id: str, rf_station_id: str | None,
-                     end: date, days: int) -> pd.DataFrame:
-    start = end - timedelta(days=days - 1)
+def get_wl_readings(conn, station_id: str, start: date, end: date) -> pd.Series:
+    """WL readings from start 00:00 to end 23:59 local, indexed by tz-aware obs_time."""
     rows = conn.execute("""
-        select d::date as day, w.wl, r.rainfall_mm
-        from generate_series(%(start)s::date, %(end)s::date, interval '1 day') d
-        left join daily_wl w    on w.station_id = %(sid)s and w.day = d::date
-        left join observed_rf r on r.rf_station_id = %(rf)s and r.obs_date = d::date
-        order by 1
-    """, {"start": start, "end": end, "sid": station_id, "rf": rf_station_id}).fetchall()
-    return pd.DataFrame(rows, columns=["day", "wl", "rainfall_mm"])
+        select obs_time, wl from observed_wl
+        where station_id = %(sid)s
+          and (obs_time at time zone 'Asia/Dhaka')::date between %(start)s and %(end)s
+        order by obs_time
+    """, {"sid": station_id, "start": start, "end": end}).fetchall()
+    return pd.Series([r[1] for r in rows], index=pd.DatetimeIndex([r[0] for r in rows]),
+                     dtype=float)
+
+
+def get_rainfall(conn, rf_station_id: str, start: date, end: date) -> pd.Series:
+    """Daily rainfall (mm) indexed by date; days FFWC didn't report are absent."""
+    rows = conn.execute("""
+        select obs_date, rainfall_mm from observed_rf
+        where rf_station_id = %s and obs_date between %s and %s order by obs_date
+    """, (rf_station_id, start, end)).fetchall()
+    return pd.Series([r[1] for r in rows], index=[r[0] for r in rows], dtype=float)
 
 
 # ---- run log -------------------------------------------------------------

@@ -54,18 +54,32 @@ create table if not exists observed_rf (
 );
 
 -- ---------- Forecasts (ours + FFWC) ----------
+-- 3-hourly: our model forecasts each FFWC reading time (06,09,12,15,18 local) for
+-- 15 days. The first version of this table was daily (target_date as a plain
+-- column); it never held data, so it is dropped and recreated once.
+do $$
+begin
+  if exists (select 1 from information_schema.columns
+             where table_schema = 'public' and table_name = 'forecasts'
+               and column_name = 'target_date' and is_generated = 'NEVER') then
+    drop table forecasts cascade;
+  end if;
+end $$;
+
 create table if not exists forecasts (
   source         text not null check (source in ('ours', 'ffwc')),
   station_id     text not null references stations(id) on delete cascade,
-  issued_on      date not null,
-  target_date    date not null,
+  issued_on      date not null,                -- local day the input data ends
+  target_time    timestamptz not null,
   wl             real not null,
-  lead_days      smallint generated always as ((target_date - issued_on)) stored,
+  target_date    date generated always as ((target_time at time zone 'Asia/Dhaka')::date) stored,
+  lead_days      smallint generated always as
+                   (((target_time at time zone 'Asia/Dhaka')::date - issued_on)) stored,
   model_version  text,
   created_at     timestamptz not null default now(),
-  primary key (source, station_id, issued_on, target_date)
+  primary key (source, station_id, issued_on, target_time)
 );
-create index if not exists forecasts_station_target_idx on forecasts (station_id, target_date);
+create index if not exists forecasts_station_target_idx on forecasts (station_id, target_time);
 
 -- ---------- Engine run log (admin only) ----------
 create table if not exists engine_runs (
@@ -111,7 +125,7 @@ with last_obs as (
 ),
 fc as (
   select station_id, max(wl) as peak_wl,
-         (array_agg(target_date order by wl desc))[1] as peak_date
+         (array_agg(target_time order by wl desc))[1] as peak_time
   from latest_forecasts where source = 'ours' group by station_id
 )
 select s.id, s.name, s.river, s.basin, s.district, s.lat, s.lon,
@@ -126,18 +140,19 @@ select s.id, s.name, s.river, s.basin, s.district, s.lat, s.lon,
          when l.wl >= coalesce(s.warning_level, s.danger_level - 0.5) then 'warning'
          else 'normal'
        end as status,
-       fc.peak_wl as forecast_peak_wl, fc.peak_date as forecast_peak_date,
+       fc.peak_wl as forecast_peak_wl, fc.peak_time as forecast_peak_time,
        coalesce(fc.peak_wl >= s.danger_level, false) as forecast_exceeds_danger
 from stations s
 left join last_obs l on l.station_id = s.id
 left join fc on fc.station_id = s.id
 where s.scrape_enabled;          -- only stations you track appear on the site
 
+-- Matched on the exact reading time, so a forecast only scores once FFWC posts that reading.
 create view forecast_vs_observed with (security_invoker = true) as
-select f.source, f.station_id, f.issued_on, f.target_date, f.lead_days,
-       f.wl as forecast_wl, d.wl as observed_wl, (f.wl - d.wl) as error
+select f.source, f.station_id, f.issued_on, f.target_time, f.target_date, f.lead_days,
+       f.wl as forecast_wl, o.wl as observed_wl, (f.wl - o.wl) as error
 from forecasts f
-join daily_wl d on d.station_id = f.station_id and d.day = f.target_date;
+join observed_wl o on o.station_id = f.station_id and o.obs_time = f.target_time;
 
 create function forecast_skill(p_station text, p_from date, p_to date)
 returns table (source text, lead_days smallint, n bigint, mae real, rmse real, bias real)

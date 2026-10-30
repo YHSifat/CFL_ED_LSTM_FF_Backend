@@ -21,7 +21,7 @@ import pandas as pd
 import config
 import db
 import scraper
-from predictor import Predictor
+from forecaster import INPUT_DAYS, Forecaster, InputError
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 log = logging.getLogger("engine")
@@ -137,12 +137,17 @@ def backfill_wl(conn, run_id: int, start: date, end: date, wl_codes=None) -> tup
 
 # ---- prediction ------------------------------------------------------------
 def predict(conn, run_id: int, issue_date: date | None = None, wl_codes=None) -> tuple[dict, list]:
+    """Forecast the 75 readings after each station's input day (issue_date, else the
+    last day with WL data) and store them as source 'ours'."""
     today = _today()
-    model = Predictor()
-    stats, errors = {"predicted": 0, "skipped": {}}, []
+    model = Forecaster()
+    stats, errors = {"predicted": 0, "skipped": {}, "filled": {}}, []
     stations = db.model_stations(conn, wl_codes)
     for n, (sid, rf_sid) in enumerate(stations, 1):
         db.set_progress(conn, run_id, f"{n}/{len(stations)} predict {sid}")
+        if not model.has_station(sid):
+            stats["skipped"][sid] = "not a station the model was trained on"
+            continue
         if not rf_sid:
             stats["skipped"][sid] = "no rainfall station mapped"
             continue
@@ -154,15 +159,18 @@ def predict(conn, run_id: int, issue_date: date | None = None, wl_codes=None) ->
             stats["skipped"][sid] = f"stale data (last {end})"
             continue
         try:
-            df = db.get_input_window(conn, sid, rf_sid, end, config.INPUT_DAYS)
-            y = model.predict(sid, df)
-            if y is None:
-                stats["skipped"][sid] = "too many missing days in input window"
-                continue
-            rows = [(sid, end, end + timedelta(days=k + 1), float(v)) for k, v in enumerate(y)]
-            db.upsert_forecasts(conn, "ours", rows, config.MODEL_VERSION)
+            start = end - timedelta(days=INPUT_DAYS - 1)
+            y, info = model.predict(sid, db.get_wl_readings(conn, sid, start, end),
+                                    db.get_rainfall(conn, rf_sid, start, end), end)
+            if info["wl_filled"] or info["rain_missing_days"]:
+                stats["filled"][sid] = info
+            rows = [(sid, end, t.to_pydatetime(), float(v)) for t, v in y.items()]
+            db.upsert_forecasts(conn, "ours", rows, model.version)
             conn.commit()
             stats["predicted"] += 1
+        except InputError as exc:
+            conn.rollback()
+            stats["skipped"][sid] = str(exc)
         except Exception as exc:  # noqa: BLE001
             conn.rollback()
             log.exception("prediction failed for %s", sid)

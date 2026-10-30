@@ -1,0 +1,74 @@
+[
+  {
+    "id": "3",
+    "station_id": "CL226",
+    "mapped_wl_station_id": "SW291.5R",
+    "name": "Dalia"
+  },
+  {
+    "id": "4",
+    "station_id": "CL178",
+    "mapped_wl_station_id": "SW294",
+    "name": "Kaunia"
+  },
+  {
+    "id": "2",
+    "station_id": "CL182",
+    "mapped_wl_station_id": "SW77, SW45",
+    "name": "Kurigram"
+  },
+  {
+    "id": "7",
+    "station_id": "CL163",
+    "mapped_wl_station_id": "SW45.5",
+    "name": "Chilmari"
+  },
+  {
+    "id": "6",
+    "station_id": "CL153",
+    "mapped_wl_station_id": "SW62",
+    "name": "Badarganj"
+  },
+  {
+    "id": "11",
+    "station_id": "CL6",
+    "mapped_wl_station_id": "SW65, SW15J",
+    "name": "Bogra"
+  },
+  {
+    "id": "12",
+    "station_id": "CL67",
+    "mapped_wl_station_id": "SW225, SW228.5",
+    "name": "Jamalpur"
+  },
+  {
+    "id": "9",
+    "station_id": "CL156",
+    "mapped_wl_station_id": "SW97, SW46.9R, SW63",
+    "name": "Gainbandha"
+  },
+  {
+    "id": "10",
+    "station_id": "CL34",
+    "mapped_wl_station_id": "SW49, SW49A, SW151, SW68A",
+    "name": "Sirajganj"
+  },
+  {
+    "id": "14",
+    "station_id": "CL9",
+    "mapped_wl_station_id": "SW42, SW177, SW180, SW7.5, SW302, SW68.5, SW137A",
+    "name": "Dhaka"
+  },
+  {
+    "id": "13",
+    "station_id": "CL-UN",
+    "mapped_wl_station_id": "",
+    "name": "Mymensingh"
+  },
+  {
+    "id": "22",
+    "station_id": "CL36",
+    "mapped_wl_station_id": "SW147.5",
+    "name": "Mymensingh"
+  }
+]

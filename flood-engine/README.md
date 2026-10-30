@@ -35,7 +35,7 @@ Two format details the scraper handles:
 ## 3. Run
 ```bash
 python -m venv .venv && source .venv/bin/activate   # Windows: .venv\Scripts\activate
-pip install -r requirements.txt        # + tensorflow / torch / scikit-learn
+pip install -r requirements.txt        # torch CPU: add --index-url https://download.pytorch.org/whl/cpu
 cp .env.example .env                   # fill it in
 
 # load station lists; tracks your rainfall stations and the WL stations they map to
@@ -70,10 +70,10 @@ await sb.from('station_status').select('*');
 await sb.from('daily_wl').select('day,wl').eq('station_id', id).gte('day', from).order('day');
 
 // 15-day forecast: ours vs FFWC
-await sb.from('latest_forecasts').select('source,target_date,wl,issued_on').eq('station_id', id).order('target_date');
+await sb.from('latest_forecasts').select('source,target_time,wl,issued_on').eq('station_id', id).order('target_time');
 
 // past performance: forecast vs observed at a fixed lead time
-await sb.from('forecast_vs_observed').select('*').eq('station_id', id).eq('lead_days', 3).order('target_date');
+await sb.from('forecast_vs_observed').select('*').eq('station_id', id).eq('lead_days', 3).order('target_time');
 
 // summary skill per lead day
 await sb.rpc('forecast_skill', { p_station: id, p_from: '2026-06-01', p_to: '2026-10-30' });

@@ -17,7 +17,11 @@ See @README.md for setup and the frontend queries.
 ## Files
 - `schema.sql`: tables, views, RLS. Idempotent, so re-run after edits. Views are dropped and recreated.
 - `scraper.py`: FFWC API client and parsers (pure functions, no DB).
-- `db.py`: all SQL. `engine.py`: orchestration and CLI. `predictor.py`: model wrapper.
+- `db.py`: all SQL. `engine.py`: orchestration and CLI. `forecaster.py`: runs the model checkpoint.
+- `check_model_parity.py`: proves `forecaster.py` matches the training pipeline (run after any change to it).
+- `run_nightly.cmd`: Task Scheduler entry point (`engine.py all` at 23:50, log in `logs/`).
+- `wl_stations.json` / `rainfall_stations.json`: station lists for `sync-stations`; the rainfall
+  file's `mapped_wl_station_id` follows the training mapping (see Model).
 - `admin.py` + `admin.html`: admin API and single-page UI (vanilla JS).
 - `config.py`: everything configurable, read from `.env`.
 
@@ -27,8 +31,9 @@ See @README.md for setup and the frontend queries.
 - `stations.rf_station_id` links a WL station to its model's rainfall input.
 - Flags: `scrape_enabled` (tracked, shown on site), `has_model` (forecast it).
   User-owned columns must never be overwritten by station sync.
-- `forecasts` keeps every issued forecast (`source` = 'ours' | 'ffwc', `issued_on`, `target_date`),
-  which powers the comparison and past-performance graphs.
+- `forecasts` keeps every issued forecast (`source` = 'ours' | 'ffwc', `issued_on`, `target_time`;
+  `target_date` and `lead_days` are generated), which powers the comparison and past-performance graphs.
+  Ours is 3-hourly: 75 rows per station per night.
 - `daily_wl` view = mean of the day's readings. It must match how the model's training data defined daily WL.
 
 ## FFWC API (endpoints the ffwc.gov.bd site itself calls)
@@ -48,18 +53,32 @@ See @README.md for setup and the frontend queries.
 - Rainfall older than ~40 days can't be re-fetched; history comes from training data CSVs
   or the user's old `scraping/scraped_data/rainfall/rf_*.json` files.
 
-## Model
-- Input: last 30 days daily [wl, rainfall_mm]; output: next 15 days WL.
-- Files in `models/`: `<station_code>.<ext>` or `global.<ext>` (.keras/.h5/.pt TorchScript/.joblib),
-  with optional `<name>_scaler_x.joblib` / `_scaler_y.joblib`.
-- Gaps of up to 3 WL days are interpolated; missing rainfall is filled with 0.
+## Model (clustered federated vanilla LSTM)
+- Checkpoint `models/clustered_fl_vanilla_lstm-local-weighted-0.5.pt` (`MODEL_PATH`); training and
+  test scripts in `models/train_test_scripts/`. Training data lives outside this repo, in the thesis
+  folder's `Datasets/Processed/Station_wise_combined/`.
+- Input: 150 steps = 30 days x 5 readings (06/09/12/15/18 local), features WL, log1p rainfall
+  (the day's value copied to its 5 readings), hour/day-of-year sin/cos, delta_hours/12.
+  Output: 75 steps = next day 06:00 .. day 15 18:00.
+- 4 cluster models (c1..c4) and a per-station scaler, all in the checkpoint. Only its 25 stations
+  can be forecast. SW179 is gone from FFWC, so SW177 (same river, similar levels) runs through
+  SW179's model and scaler (`STATION_ALIASES` in `forecaster.py`); its forecasts are stored as SW177.
+- `models/prediction_scripts/` is the earlier offline pipeline (JSON -> CSV -> older checkpoint with
+  global scalers). Reference only; it can't load the current checkpoint.
+- Preprocessing must match `fl_lstm_claude.py` exactly: WL gaps up to 10 readings interpolated,
+  longer gaps skip the station; missing rain = 0. Verify with `check_model_parity.py --data <dir>`.
+- Rainfall station per WL station = training `STATION_MAPPING` (thesis `Preprocessing/map_wl_with_all.py`).
+  CL42 (SW137A, SW68.5, SW302) has no known FFWC api id, so CL9 stands in.
+- At 23:50 FFWC hasn't posted the day's 18:00 reading (it appears after 02:00), so it is filled
+  with the 15:00 value; run stats record fills per station (`filled`).
 
 ## Open tasks
 1. Importer for the old scraper's JSON files (`scraping/scraped_data/wl/*.json`, `.../rainfall/rf_*.json`).
 2. Scrape FFWC's own forecasts for the comparison graph (`scraper.fetch_ffwc_forecasts` is a stub;
    needs a sample response from the forecast endpoint).
 3. Find the FFWC rainfall station list endpoint so all rainfall stations can be imported.
-4. Schedule `python engine.py all` (Task Scheduler / cron) once manual runs work.
+4. Register `run_nightly.cmd` in Task Scheduler (daily 23:50) once a manual `engine.py all` works.
+5. Find CL42's FFWC rainfall api id and switch SW137A, SW68.5, SW302 back to it.
 
 ## Conventions
 - Python 3.11+, psycopg 3, no ORM. All SQL lives in `db.py`.
