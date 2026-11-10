@@ -63,6 +63,9 @@ Backfill past forecasts for the performance graph (hindcast):
 ```js
 const sb = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
+// cache check: newest reading / forecast write / station edit; the site refetches when it changes
+await sb.rpc('data_stamp');
+
 // map markers + warning sign
 await sb.from('station_status').select('*');
 

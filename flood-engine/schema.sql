@@ -80,6 +80,9 @@ create table if not exists forecasts (
   primary key (source, station_id, issued_on, target_time)
 );
 create index if not exists forecasts_station_target_idx on forecasts (station_id, target_time);
+-- For data_stamp(): max() over these is a single index lookup.
+create index if not exists forecasts_created_at_idx on forecasts (created_at);
+create index if not exists observed_wl_obs_time_idx on observed_wl (obs_time);
 
 -- ---------- Engine run log (admin only) ----------
 create table if not exists engine_runs (
@@ -97,6 +100,7 @@ alter table engine_runs add column if not exists progress text;
 -- Views (dropped and recreated so changes apply on re-run)
 -- =====================================================================
 drop function if exists forecast_skill(text, date, date);
+drop function if exists data_stamp();
 drop function if exists comparison_skill(text);
 drop function if exists comparison_issues(text);
 drop function if exists horizon_performance(text, int, date, date);
@@ -259,6 +263,16 @@ language sql stable as $$
   group by source, lead_days order by source, lead_days;
 $$;
 
+-- Newest reading and newest forecast write (created_at is reset on re-runs), plus the last
+-- station edit. The website caches query results in the browser until this value changes.
+create function data_stamp()
+returns table (last_obs timestamptz, last_forecast timestamptz, last_station timestamptz)
+language sql stable as $$
+  select (select max(obs_time) from observed_wl),
+         (select max(created_at) from forecasts),
+         (select max(updated_at) from stations);
+$$;
+
 -- =====================================================================
 -- Row Level Security: anon key can read, never write.
 -- =====================================================================
@@ -283,7 +297,7 @@ grant select on stations, rf_stations, observed_wl, observed_rf, forecasts,
                 forecast_steps
   to anon, authenticated;
 revoke all on engine_runs from anon, authenticated;
-grant execute on function forecast_skill(text, date, date) to anon, authenticated;
+grant execute on function forecast_skill(text, date, date), data_stamp() to anon, authenticated;
 grant execute on function comparison_skill(text), comparison_issues(text) to anon, authenticated;
 grant execute on function horizon_performance(text, int, date, date), horizon_skill(text, date, date)
   to anon, authenticated;
