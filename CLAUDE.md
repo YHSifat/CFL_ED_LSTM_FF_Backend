@@ -3,7 +3,7 @@
 Backend for a Bangladesh flood forecasting website (modelled on ffwc.gov.bd).
 The frontend is already built and hosted separately; it reads from Supabase.
 
-All code is in `flood-engine/`; see @flood-engine/README.md for setup and the frontend queries.
+All code is in `flood-engine/`; see @README.md for setup and the frontend queries.
 
 ## Architecture
 - **Local engine (this repo, Python)**: scrapes FFWC, runs a pretrained water level (WL)

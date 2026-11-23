@@ -8,8 +8,10 @@ Department of CSE, Jagannath University).
 The engine runs on a local machine. It scrapes observed water levels and rainfall from the
 Flood Forecasting and Warning Centre (FFWC, [ffwc.gov.bd](https://www.ffwc.gov.bd)), runs the
 trained clustered federated model to forecast the next 15 days, and writes observations and
-forecasts to a Supabase Postgres database. The [frontend](../../CFL_ED_LSTM_FF_Frontend) reads
+forecasts to a Supabase Postgres database. The [frontend](../CFL_ED_LSTM_FF_Frontend) reads
 that database and shows the results.
+
+**Live site: <https://bonna-bd.vercel.app/>**
 
 ## Overview
 
@@ -85,6 +87,8 @@ The website needs no backend server: Supabase generates a REST API over the tabl
 and row-level security makes them read-only for the public anon key. The engine connects as
 `postgres` through the session pooler URL, so it can write.
 
+All code is in `flood-engine/`:
+
 | File | Role |
 |---|---|
 | `engine.py` | Orchestration and CLI (sync stations, scrape, backfill, predict, import). |
@@ -114,8 +118,10 @@ Requirements: Python 3.11+, a free Supabase project, and an FFWC API key.
    database password never leave your machine.
 
 ### 2. Install and configure
+From the repo root (`run_nightly.cmd` expects `.venv` there):
 ```bash
 python -m venv .venv && source .venv/bin/activate   # Windows: .venv\Scripts\activate
+cd flood-engine                        # all following commands run from here
 pip install -r requirements.txt        # torch CPU: add --index-url https://download.pytorch.org/whl/cpu
 cp .env.example .env                   # fill in DATABASE_URL and FFWC_API_KEY
 ```
